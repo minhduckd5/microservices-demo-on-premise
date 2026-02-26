@@ -90,6 +90,7 @@ async def login(
         key="session_id",
         value=session_id,
         httponly=True,
+        secure=settings.cookie_secure,
         max_age=ttl,
         samesite="lax",
     )

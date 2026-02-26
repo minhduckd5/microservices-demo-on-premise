@@ -9,6 +9,8 @@ jobs:
   lint-and-typecheck:
     name: Lint & Type-check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +44,8 @@ jobs:
   test-services:
     name: Test Services
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:16
@@ -111,6 +115,8 @@ jobs:
   docker-build:
     name: Docker Build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [lint-and-typecheck, test-services]
     steps:
       - uses: actions/checkout@v4
@@ -157,6 +163,8 @@ jobs:
   trivy-scan:
     name: Trivy Security Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: docker-build
     steps:
       - uses: actions/checkout@v4
@@ -211,6 +219,8 @@ jobs:
   sonarqube-placeholder:
     name: SonarQube Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: test-services
     steps:
       - uses: actions/checkout@v4

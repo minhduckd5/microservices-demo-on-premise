@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production-super-secret-key"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
+    cookie_secure: bool = True
 
     class Config:
         env_file = ".env"

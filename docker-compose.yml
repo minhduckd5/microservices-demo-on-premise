@@ -64,6 +64,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://user:password@postgres-auth:5432/auth_db
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: dev-secret-change-in-production
+      COOKIE_SECURE: "false"
     depends_on:
       postgres-auth:
         condition: service_healthy
