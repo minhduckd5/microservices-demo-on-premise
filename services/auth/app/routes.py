@@ -26,7 +26,7 @@ def _verify_password(plain: str, hashed: str) -> bool:
 
 
 def _create_jwt(user_id: str) -> str:
-    expire = datetime.datetime.utcnow() + datetime.timedelta(
+    expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
         minutes=settings.access_token_expire_minutes
     )
     return jwt.encode(
@@ -69,7 +69,7 @@ async def login(
 
     token = _create_jwt(user.id)
     session_id = str(uuid.uuid4())
-    expires_at = datetime.datetime.utcnow() + datetime.timedelta(
+    expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
         minutes=settings.access_token_expire_minutes
     )
     session = Session(

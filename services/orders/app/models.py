@@ -17,7 +17,7 @@ class Order(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
     total: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.datetime.utcnow
+        DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
 
     items: Mapped[list["OrderItem"]] = relationship(
