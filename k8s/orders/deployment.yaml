@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders
+  namespace: microservices
+  labels:
+    app.kubernetes.io/name: orders
+    app.kubernetes.io/version: "1.0.0"
+    chaos-mesh-enabled: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: orders
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: orders
+        app.kubernetes.io/version: "1.0.0"
+        chaos-mesh-enabled: "true"
+    spec:
+      containers:
+        - name: orders
+          image: microservices-demo/orders:1.0.0
+          ports:
+            - containerPort: 8003
+          env:
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://user:password@postgres-orders:5432/orders_db"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8003
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8003
+            initialDelaySeconds: 5
+            periodSeconds: 5

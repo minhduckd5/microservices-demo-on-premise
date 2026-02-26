@@ -1,0 +1,81 @@
+stages:
+  - pull
+  - deploy
+  - smoke-test
+
+variables:
+  REGISTRY: registry.example.com
+  IMAGE_TAG: "${CI_COMMIT_SHORT_SHA}"
+
+# ── Pull stage ──────────────────────────────────────────────────
+pull:auth:
+  stage: pull
+  script:
+    - docker pull ${REGISTRY}/microservices-demo/auth:${IMAGE_TAG} || docker pull ${REGISTRY}/microservices-demo/auth:latest
+  tags: [docker]
+
+pull:catalog:
+  stage: pull
+  script:
+    - docker pull ${REGISTRY}/microservices-demo/catalog:${IMAGE_TAG} || docker pull ${REGISTRY}/microservices-demo/catalog:latest
+  tags: [docker]
+
+pull:orders:
+  stage: pull
+  script:
+    - docker pull ${REGISTRY}/microservices-demo/orders:${IMAGE_TAG} || docker pull ${REGISTRY}/microservices-demo/orders:latest
+  tags: [docker]
+
+pull:frontend:
+  stage: pull
+  script:
+    - docker pull ${REGISTRY}/microservices-demo/frontend:${IMAGE_TAG} || docker pull ${REGISTRY}/microservices-demo/frontend:latest
+  tags: [docker]
+
+# ── Deploy stage ────────────────────────────────────────────────
+deploy:k8s:
+  stage: deploy
+  needs: [pull:auth, pull:catalog, pull:orders, pull:frontend]
+  script:
+    - kubectl create namespace microservices --dry-run=client -o yaml | kubectl apply -f -
+    - kubectl apply -f k8s/ --recursive
+    - kubectl rollout status deployment/auth    -n microservices --timeout=120s
+    - kubectl rollout status deployment/catalog -n microservices --timeout=120s
+    - kubectl rollout status deployment/orders  -n microservices --timeout=120s
+    - kubectl rollout status deployment/frontend -n microservices --timeout=120s
+  environment:
+    name: production
+  only:
+    - main
+  tags: [kubernetes]
+
+# ── Smoke-test stage ────────────────────────────────────────────
+smoke-test:auth:
+  stage: smoke-test
+  needs: [deploy:k8s]
+  script:
+    - curl -sf http://auth.microservices.svc.cluster.local:8001/health/live
+    - curl -sf http://auth.microservices.svc.cluster.local:8001/health/ready
+  only:
+    - main
+  tags: [kubernetes]
+
+smoke-test:catalog:
+  stage: smoke-test
+  needs: [deploy:k8s]
+  script:
+    - curl -sf http://catalog.microservices.svc.cluster.local:8002/health/live
+    - curl -sf http://catalog.microservices.svc.cluster.local:8002/health/ready
+  only:
+    - main
+  tags: [kubernetes]
+
+smoke-test:orders:
+  stage: smoke-test
+  needs: [deploy:k8s]
+  script:
+    - curl -sf http://orders.microservices.svc.cluster.local:8003/health/live
+    - curl -sf http://orders.microservices.svc.cluster.local:8003/health/ready
+  only:
+    - main
+  tags: [kubernetes]

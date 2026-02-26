@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: microservices
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      - job_name: "auth-service"
+        static_configs:
+          - targets: ["auth:8001"]
+
+      - job_name: "catalog-service"
+        static_configs:
+          - targets: ["catalog:8002"]
+
+      - job_name: "orders-service"
+        static_configs:
+          - targets: ["orders:8003"]
