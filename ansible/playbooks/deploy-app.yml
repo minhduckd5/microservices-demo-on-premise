@@ -1,0 +1,210 @@
+# Deploy Online Boutique to K3s cluster On-Prem
+#
+# Execution:
+# 1. Sync project files to control-plane
+# 2. Build Docker images for all microservices using Docker directly
+# 3. Push images to local registry (registry.local:5000)
+# 4. Deploy via kubectl + kustomize K3s overlay (uses Containerd running in K3s)
+#
+# Run: ansible-playbook -i inventory/hosts.yml playbooks/deploy-app.yml
+
+---
+- name: Build and Push Microservice Images
+  hosts: k3s_control_plane
+  become: yes
+  gather_facts: no
+  vars:
+    repo_root: /tmp/microservices-demo
+    local_repo_root: "{{ playbook_dir }}/../../"
+  tasks:
+    - name: Verify Docker is available on control-plane
+      command: docker --version
+      register: docker_version
+      changed_when: false
+
+    - name: Verify K3s kubectl is available
+      command: /usr/local/bin/k3s kubectl version --client
+      register: kubectl_version
+      changed_when: false
+
+    - name: Sync local project workspace to control-plane
+      delegate_to: localhost
+      become: no
+      shell: |
+        tar \
+          --exclude=.git \
+          --exclude=.vagrant \
+          --exclude=.terraform \
+          --exclude=**/__pycache__ \
+          --exclude=**/.pytest_cache \
+          -C "{{ local_repo_root }}" -cf - . | \
+        ssh -i "{{ ansible_ssh_private_key_file }}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "{{ ansible_user }}@{{ ansible_host }}" \
+          "sudo rm -rf {{ repo_root }} && sudo mkdir -p {{ repo_root }} && sudo tar -xf - -C {{ repo_root }} && sudo chown -R {{ ansible_user }}:{{ ansible_user }} {{ repo_root }}"
+      changed_when: true
+
+    - name: Build and push images with docker
+      shell: |
+        set -e
+        echo "Building {{ item.service }}..."
+        cd {{ item.path }}
+        
+        # Disable BuildKit to avoid multi-arch / docker-buildx missing errors
+        export DOCKER_BUILDKIT=0 
+        
+        n=0
+        until [ "$n" -ge 3 ]
+        do
+          echo "Attempt $((n+1)) for {{ item.service }}..."
+          docker build --network=host -t {{ container_images_registry }}/{{ item.service }}:{{ microservices_image_tag }} . && break
+          n=$((n+1))
+          echo "docker build failed, retrying in 5 seconds..."
+          sleep 5
+        done
+        
+        if [ "$n" -ge 3 ]; then
+          echo "Failed to build {{ item.service }} after 3 attempts."
+          exit 1
+        fi
+        
+        echo "Pushing {{ item.service }}:{{ microservices_image_tag }}..."
+        docker push {{ container_images_registry }}/{{ item.service }}:{{ microservices_image_tag }}
+      loop:
+        - { service: "emailservice", path: "{{ repo_root }}/src/emailservice" }
+        - { service: "productcatalogservice", path: "{{ repo_root }}/src/productcatalogservice" }
+        - { service: "recommendationservice", path: "{{ repo_root }}/src/recommendationservice" }
+        - { service: "shippingservice", path: "{{ repo_root }}/src/shippingservice" }
+        - { service: "checkoutservice", path: "{{ repo_root }}/src/checkoutservice" }
+        - { service: "paymentservice", path: "{{ repo_root }}/src/paymentservice" }
+        - { service: "currencyservice", path: "{{ repo_root }}/src/currencyservice" }
+        - { service: "cartservice", path: "{{ repo_root }}/src/cartservice/src" }
+        - { service: "frontend", path: "{{ repo_root }}/src/frontend" }
+        - { service: "adservice", path: "{{ repo_root }}/src/adservice" }
+        - { service: "loadgenerator", path: "{{ repo_root }}/src/loadgenerator" }
+      register: docker_build
+
+    # MODIFIED: kustomize maps redis:alpine → CONTAINER_IMAGES_REGISTRY/redis:alpine; mirror from Docker Hub.
+    - name: Mirror redis image to local registry (matches kustomize base redis-cart tag)
+      shell: |
+        set -e
+        docker pull redis:{{ redis_image_tag }}
+        docker tag redis:{{ redis_image_tag }} {{ container_images_registry }}/redis:{{ redis_image_tag }}
+        docker push {{ container_images_registry }}/redis:{{ redis_image_tag }}
+      register: redis_mirror
+
+    - name: Detailed Build Logs 
+      debug:
+        msg: "Build output for {{ item.item.service }}: \n{{ item.stdout }}"
+      loop: "{{ docker_build.results }}"
+      when: item.changed
+
+    - name: Verify images broadly in registry
+      shell: |
+        curl -s http://{{ registry_ip }}:{{ registry_port }}/v2/_catalog
+      changed_when: false
+      register: registry_catalog
+
+    - name: Show Registry Catalog
+      debug:
+        msg: "Registry now contains: {{ registry_catalog.stdout }}"
+
+- name: Deploy Online Boutique to K3s
+  hosts: k3s_control_plane
+  become: yes
+  gather_facts: no
+  vars:
+    repo_root: /tmp/microservices-demo  # Synced to control-plane
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+  tasks:
+    - name: Verify synced repository exists on control-plane
+      stat:
+        path: "{{ repo_root }}"
+      register: repo_stat
+
+    - name: Fail if repository is missing on control-plane
+      fail:
+        msg: "Expected synced repository at {{ repo_root }}. Run the build/sync play first."
+      when: not repo_stat.stat.exists
+
+    - name: Render kustomize manifests with registry substitution and Detailed Output
+      shell: |
+        set -e
+        cd {{ repo_root }}
+        /usr/local/bin/k3s kubectl kustomize kustomize/environments/{{ kustomize_env }} \
+          --kubeconfig={{ kubeconfig }} \
+          > /tmp/microservices-demo/deploy-raw.yaml
+          
+        cat /tmp/microservices-demo/deploy-raw.yaml | \
+        sed "s|CONTAINER_IMAGES_REGISTRY|{{ container_images_registry }}|g" > /tmp/microservices-demo/deploy.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: manifests
+      changed_when: false
+
+    - name: View generated deployment manifests summary
+      shell: |
+        grep -E "^kind:" /tmp/microservices-demo/deploy.yaml | sort | uniq -c
+      register: manifests_summary
+      changed_when: false
+
+    - name: Show manifest summary
+      debug:
+        msg: "Manifests ready to apply: \n {{ manifests_summary.stdout }}"
+
+    - name: Deploy Online Boutique Component Manifests
+      shell: |
+        /usr/local/bin/k3s kubectl apply -f /tmp/microservices-demo/deploy.yaml --kubeconfig={{ kubeconfig }}
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: deploy_result
+
+    - name: Log out deployment
+      debug:
+        msg: "Deployment Application Logic Result: \n{{ deploy_result.stdout }}"
+
+    # MODIFIED: k3s kubectl older builds reject `rollout status deployment --all`; loop by name instead.
+    - name: Wait for deployments to be ready
+      shell: |
+        set -e
+        KUBECTL="/usr/local/bin/k3s kubectl"
+        for deploy in $($KUBECTL get deployment -n default -o jsonpath='{.items[*].metadata.name}' --kubeconfig={{ kubeconfig }}); do
+          echo "Waiting for deployment/${deploy}..."
+          $KUBECTL rollout status "deployment/${deploy}" \
+            --kubeconfig={{ kubeconfig }} \
+            -n default \
+            --timeout=600s
+        done
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: rollout_status
+
+    - name: Display deployment status
+      shell: |
+        echo "=== Pods ==="
+        /usr/local/bin/k3s kubectl get pods -n default --kubeconfig={{ kubeconfig }}
+        echo ""
+        echo "=== Ingress ==="
+        /usr/local/bin/k3s kubectl get ingress -n default --kubeconfig={{ kubeconfig }}
+        echo ""
+        echo "=== Services ==="
+        /usr/local/bin/k3s kubectl get svc -n default --kubeconfig={{ kubeconfig }}
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: final_status
+      changed_when: false
+
+    - name: Deployment Complete!
+      debug:
+        msg: |
+          ✓ Online Boutique deployed successfully!
+          
+          {{ final_status.stdout }}
+          
+          Access the application:
+            Ingress hostname: boutique.internal (from K3s cluster)
+            Port-forward: kubectl port-forward svc/frontend 8080:80 --kubeconfig={{ kubeconfig }}
+            Then visit: http://localhost:8080
+          
+          Troubleshooting:
+            Check unready pods: kubectl get pods
+            View pod logs: kubectl logs -f <pod-name>
+            Check events: kubectl get events --sort-by='.metadata.creationTimestamp'

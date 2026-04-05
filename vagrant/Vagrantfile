@@ -1,0 +1,161 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+#
+# Vagrant configuration for Online Boutique on-prem deployment
+# Provisions 4 VMs (1 control-plane, 2 workers, 1 registry) for bridge-only VMware networking
+# Provider: VMware (vmware_workstation), fallback to VirtualBox
+#
+# Usage:
+#   vagrant up --provider=vmware_workstation
+#   Export kubeconfig: scp -i .vagrant/machines/k3s-control/vmware_workstation/private_key vagrant@<CONTROL_IP>:~/.kube/config ~/.kube/config-onprem
+#   Then: kubectl --kubeconfig ~/.kube/config-onprem get nodes
+
+# MODIFIED: Bridge-only static IP model (no Vagrant private_network).
+GATEWAY_IP = ENV.fetch("VMWARE_GATEWAY", "192.168.1.1")
+IP_PREFIX = ENV.fetch("VMWARE_IP_PREFIX", "192.168.1")
+BRIDGE_NETWORK = ENV.fetch("VMWARE_BRIDGE", "VMnet8")
+
+# boutique.internal → control-plane (ingress / port-forward target). Must be a real VM IP.
+SHARED_HOSTS = [
+  ["#{IP_PREFIX}.210", "k3s-control"],
+  ["#{IP_PREFIX}.211", "k3s-worker1"],
+  ["#{IP_PREFIX}.212", "k3s-worker2"],
+  ["#{IP_PREFIX}.220", "registry.local"],
+  ["#{IP_PREFIX}.210", "boutique.internal"]
+]
+
+NETWORK_SCRIPT = <<-'SCRIPT'
+  set -e
+
+  NEW_IP="$1"
+  GATEWAY="$2"
+
+  IFACE=$(ip route | awk '/default/ {print $5; exit}')
+  if [ -z "$IFACE" ]; then
+    IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(en|eth)' | head -n 1)
+  fi
+
+  if [ -z "$IFACE" ]; then
+    echo "Could not detect NIC for static IP setup"
+    exit 1
+  fi
+
+  echo "network: {config: disabled}" > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+  rm -f /etc/netplan/50-cloud-init.yaml
+
+  cat >/etc/netplan/01-vagrant-static.yaml <<EOF
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    ${IFACE}:
+      dhcp4: no
+      addresses:
+        - ${NEW_IP}/24
+      routes:
+        - to: default
+          via: ${GATEWAY}
+      nameservers:
+        addresses: [8.8.8.8, 1.1.1.1]
+EOF
+
+  chmod 600 /etc/netplan/01-vagrant-static.yaml
+
+  # Apply after provisioner exits to avoid SSH cut during this step.
+  systemd-run --on-active=10s --unit=vagrant-netplan-apply /usr/sbin/netplan apply
+  exit 0
+SCRIPT
+
+PACKAGE_SCRIPT = <<-'SCRIPT'
+  set -e
+  export DEBIAN_FRONTEND=noninteractive
+
+  apt-get update -qq
+  apt-get install -y -qq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    curl wget git vim net-tools kmod linux-headers-$(uname -r) docker.io
+
+  systemctl start docker
+  systemctl enable docker
+  usermod -aG docker vagrant
+
+  # --- START MODIFICATION ---
+  # MODIFIED: Disabled Google APT kubectl install — it curls packages.cloud.google.com and
+  # apt.kubernetes.io; DNS can still be unstable during first provision (see curl exit 6).
+  # After Ansible k3s-bootstrap, use: /usr/local/bin/k3s kubectl (or install kubectl another way).
+  # curl -fsSLo /usr/share/keyrings/kubernetes-archive-keyring.gpg \
+  #   https://packages.cloud.google.com/apt/doc/apt-key.gpg
+  # echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" \
+  #   > /etc/apt/sources.list.d/kubernetes.list
+  # apt-get update -qq
+  # apt-get install -y -qq kubectl
+  # --- END MODIFICATION ---
+SCRIPT
+
+REGISTRY_SCRIPT = <<-'SCRIPT'
+  set -e
+  apt-get update -qq
+  apt-get install -y -qq curl docker.io
+  systemctl start docker
+  systemctl enable docker
+SCRIPT
+
+Vagrant.configure("2") do |config|
+  config.vm.box = ENV.fetch("VAGRANT_BASE_BOX", "gutehall/ubuntu24-04")
+  box_version = ENV["VAGRANT_BASE_BOX_VERSION"]
+  config.vm.box_version = box_version unless box_version.nil? || box_version.empty?
+
+  config.ssh.insert_key = false
+  config.ssh.forward_agent = true
+  config.ssh.connect_timeout = 300
+
+  config.vm.provider "vmware_workstation" do |vmware|
+    vmware.gui = false
+    vmware.vmx["memsize"] = "2048"
+    vmware.vmx["numvcpus"] = "2"
+    vmware.vmx["vhv.enable"] = ENV.fetch("VMWARE_ENABLE_VHV", "FALSE")
+    vmware.vmx["ethernet0.pcislotnumber"] = "160"
+    vmware.vmx["ethernet1.pcislotnumber"] = "224"
+  end
+  config.vm.provider "virtualbox" do |vb|
+    vb.gui = false
+    vb.memory = 2048
+    vb.cpus = 2
+  end
+
+  machines = [
+    { name: "k3s-control", ip: "#{IP_PREFIX}.210", memory: 4096, cpus: 2, shell: PACKAGE_SCRIPT, ssh_port: 2222 },
+    { name: "k3s-worker1", ip: "#{IP_PREFIX}.211", memory: 2048, cpus: 2, shell: PACKAGE_SCRIPT, ssh_port: 2223 },
+    { name: "k3s-worker2", ip: "#{IP_PREFIX}.212", memory: 2048, cpus: 2, shell: PACKAGE_SCRIPT, ssh_port: 2224 },
+    { name: "registry-vm", ip: "#{IP_PREFIX}.220", memory: 2048, cpus: 2, shell: REGISTRY_SCRIPT, ssh_port: 2225 }
+  ]
+
+  machines.each do |machine|
+    config.vm.define machine[:name] do |node|
+      node.vm.hostname = machine[:name]
+      node.vm.network "public_network", bridge: BRIDGE_NETWORK, auto_config: false
+      node.vm.network "forwarded_port", guest: 22, host: machine[:ssh_port], id: "ssh", disabled: true
+
+      node.vm.provider "vmware_workstation" do |vmware|
+        vmware.vmx["memsize"] = machine[:memory].to_s
+        vmware.vmx["numvcpus"] = machine[:cpus].to_s
+        vmware.vmx["displayName"] = machine[:name]
+      end
+      node.vm.provider "virtualbox" do |vb|
+        vb.memory = machine[:memory]
+        vb.cpus = machine[:cpus]
+      end
+
+      node.vm.provision "shell", privileged: true, inline: machine[:shell]
+
+      SHARED_HOSTS.each do |entry|
+        ip = entry[0]
+        host = entry[1]
+        node.vm.provision "shell", privileged: true, inline: "grep -qE '^#{ip}\\s+#{host}(\\s|$)' /etc/hosts || echo '#{ip} #{host}' >> /etc/hosts"
+      end
+
+      node.vm.provision "shell", privileged: true, inline: NETWORK_SCRIPT, args: [machine[:ip], GATEWAY_IP]
+    end
+  end
+end

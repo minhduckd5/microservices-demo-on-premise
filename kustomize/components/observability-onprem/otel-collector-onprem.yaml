@@ -1,0 +1,88 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opentelemetrycollector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opentelemetrycollector
+  template:
+    metadata:
+      labels:
+        app: opentelemetrycollector
+    spec:
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+      - name: otel-gateway
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+        args:
+        - --config=/conf/collector-gateway-config.yaml
+        image: otel/opentelemetry-collector-contrib:0.147.0
+        volumeMounts:
+        - name: collector-gateway-config
+          mountPath: /conf
+      volumes:
+      - name: collector-gateway-config
+        configMap:
+          items:
+          - key: collector-gateway-config.yaml
+            path: collector-gateway-config.yaml
+          name: collector-gateway-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opentelemetrycollector
+spec:
+  ports:
+  - name: grpc-otlp
+    port: 4317
+    protocol: TCP
+    targetPort: 4317
+  selector:
+    app: opentelemetrycollector
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: collector-gateway-config
+data:
+  collector-gateway-config.yaml: |
+    receivers:
+      otlp:
+        protocols: 
+          grpc:
+            endpoint: 0.0.0.0:4317
+    processors:
+      batch:
+    exporters:
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        namespace: default
+      jaeger:
+        endpoint: "jaeger-all-in-one:14250"
+        tls:
+          insecure: true
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp] 
+          processors: [batch]
+          exporters: [jaeger] 
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [prometheus] 

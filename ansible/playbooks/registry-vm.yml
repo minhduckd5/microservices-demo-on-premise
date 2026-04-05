@@ -1,0 +1,160 @@
+# Registry VM setup for local container images
+#
+# Spins up Docker Registry 2.0 on registry-vm (192.168.1.20:5000)
+# Registry is reachable from K3s cluster nodes for pulling images
+#
+# Run: ansible-playbook -i inventory/hosts.yml playbooks/registry-vm.yml
+
+---
+- name: Setup Local Docker Registry on registry-vm
+  hosts: registry
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: Wait for cloud-init to finish
+      shell: |
+        if command -v cloud-init >/dev/null 2>&1; then
+          timeout 300 cloud-init status --wait || true
+          cloud-init status || true
+        else
+          echo "status: done (cloud-init not installed)"
+        fi
+      register: cloud_init_result
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure docker service is running
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Create registry data directory
+      file:
+        path: /data/registry
+        state: directory
+        mode: '0755'
+
+    - name: Create Docker daemon config for insecure registry
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "insecure-registries": ["registry.local:5000", "0.0.0.0/0"],
+            "log-driver": "json-file"
+          }
+        mode: '0644'
+      register: daemon_config
+
+    - name: Restart Docker to apply daemon config
+      systemd:
+        name: docker
+        state: restarted
+      when: daemon_config.changed
+
+    # --- START MODIFICATION ---
+    # MODIFIED: Your `deploy-app.yml` uses `docker push` from `k3s-control`.
+    # That Docker daemon must treat `registry.local:5000` as insecure (HTTP),
+    # otherwise it will attempt HTTPS and time out.
+    - name: Configure insecure Docker registry on k3s-control
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "insecure-registries": ["registry.local:5000", "0.0.0.0/0"],
+            "log-driver": "json-file"
+          }
+        mode: '0644'
+      delegate_to: k3s-control
+      register: control_daemon_config
+
+    - name: Restart Docker on k3s-control to apply insecure registry
+      systemd:
+        name: docker
+        state: restarted
+      when: control_daemon_config.changed
+      delegate_to: k3s-control
+    # --- END MODIFICATION ---
+
+    - name: Pull registry image from Docker Hub
+      shell: docker pull registry:2
+      register: registry_pull
+      retries: 3
+      delay: 10
+      until: registry_pull.rc == 0
+
+    - name: Start local Docker registry container
+      docker_container:
+        name: local-registry
+        image: registry:2
+        ports:
+          - "5000:5000"
+        volumes:
+          - /data/registry:/var/lib/registry
+        restart_policy: always
+        state: started
+
+    - name: Verify registry is responding
+      uri:
+        url: "http://localhost:5000/v2/"
+        method: GET
+        status_code: 200
+      register: registry_health
+      retries: 10
+      delay: 5
+      until: registry_health.status == 200
+
+    - name: Configure K3s nodes to trust registry
+      block:
+        - name: Add registry.local to /etc/hosts on all K3s cluster nodes
+          lineinfile:
+            path: /etc/hosts
+            state: present
+            regexp: '^{{ registry_ip }}\s+registry\.local(\s|$)'
+            line: "{{ registry_ip }} registry.local"
+          delegate_to: "{{ item }}"
+          loop:
+            - k3s-control
+            - k3s-worker1
+            - k3s-worker2
+
+        # MODIFIED: Every node that runs workloads must trust the HTTP registry mirror.
+        # Without this on workers, containerd rejects pulls to registry.local:5000 → ImagePullBackOff.
+        - name: Create K3s registries config on all cluster nodes
+          copy:
+            dest: /etc/rancher/k3s/registries.yaml
+            content: |
+              mirrors:
+                registry.local:5000:
+                  endpoint:
+                    - http://registry.local:5000
+            mode: '0644'
+          delegate_to: "{{ item }}"
+          loop: "{{ groups['k3s_cluster'] }}"
+          register: k3s_registries_config
+
+        - name: Restart K3s server on control-plane if registries config changed
+          systemd:
+            name: k3s
+            state: restarted
+          delegate_to: k3s-control
+          when: >
+            (k3s_registries_config.results | selectattr('item', 'equalto', 'k3s-control') | map(attribute='changed') | list | first) | default(false)
+
+        - name: Restart k3s-agent on workers if registries config changed
+          systemd:
+            name: k3s-agent
+            state: restarted
+          delegate_to: "{{ item.item }}"
+          loop: "{{ k3s_registries_config.results }}"
+          when: item.changed and item.item in groups['k3s_agents']
+
+    - name: Display registry info
+      debug:
+        msg: |
+          ✓ Local Docker Registry is running on {{ registry_ip }}:{{ registry_port }}
+          ✓ All K3s nodes configured to use registry.local:5000
+          ✓ Registry is ready for image pushes
+          
+          Next: Run deploy-app.yml to build, push, and deploy microservices
+

@@ -128,6 +128,7 @@ Find **Protocol Buffers Descriptions** at the [`./protos` directory](/protos).
 
 ## Additional deployment options
 
+- **On-prem (Vagrant + VMware + K3s + Ansible)**: multi-VM lab with a local registry and build/push of images — see [docs/QUICKSTART-VAGRANT-ANSIBLE.md](/docs/QUICKSTART-VAGRANT-ANSIBLE.md) and [docs/on-prem-deployment.md](/docs/on-prem-deployment.md).
 - **Terraform**: [See these instructions](/terraform) to learn how to deploy Online Boutique using [Terraform](https://www.terraform.io/intro).
 - **Istio / Cloud Service Mesh**: [See these instructions](/kustomize/components/service-mesh-istio/README.md) to deploy Online Boutique alongside an Istio-backed service mesh.
 - **Non-GKE clusters (Minikube, Kind, etc)**: See the [Development guide](/docs/development-guide.md) to learn how you can deploy Online Boutique on non-GKE clusters.

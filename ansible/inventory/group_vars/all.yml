@@ -1,0 +1,17 @@
+---
+# --- START MODIFICATION ---
+# MODIFIED: Vagrantfile sets config.ssh.insert_key = false, so VMware does not lay down
+# per-VM private_key files under vagrant/.vagrant/machines/<name>/… — SSH uses Vagrant's
+# well-known insecure key instead (~/.vagrant.d/insecure_private_key on the host where
+# Vagrant / SSH runs).
+#
+# WSL: if you ran `vagrant up` from Windows but Ansible from Linux, the key lives under
+# the Windows profile — set before playbooks, e.g.:
+#   export VAGRANT_INSECURE_KEY=/mnt/c/Users/minhduc/.vagrant.d/insecure_private_key
+#   chmod 600 "$VAGRANT_INSECURE_KEY"
+ansible_ssh_private_key_file: >-
+  {{
+    lookup('ansible.builtin.env', 'VAGRANT_INSECURE_KEY')
+    | default(lookup('ansible.builtin.env', 'HOME') ~ '/.vagrant.d/insecure_private_key', true)
+  }}
+# --- END MODIFICATION ---

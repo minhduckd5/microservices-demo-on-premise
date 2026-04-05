@@ -1,0 +1,199 @@
+# Main bootstrap playbook for K3s cluster on Vagrant VMs
+#
+# Execution order:
+# 1. Install K3s control-plane on k3s-control
+# 2. Install K3s agents on workers (they join automatically)
+# 3. Verify cluster is healthy
+#
+# Run: ansible-playbook -i inventory/hosts.yml playbooks/k3s-bootstrap.yml
+
+---
+- name: Bootstrap K3s Control-Plane on Single Node
+  hosts: k3s_control_plane
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: Wait for cloud-init to finish
+      shell: |
+        if command -v cloud-init >/dev/null 2>&1; then
+          timeout 300 cloud-init status --wait || true
+          cloud-init status || true
+        else
+          echo "status: done (cloud-init not installed)"
+        fi
+      register: cloud_init_result
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure docker service is running
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Create k3s config directory
+      file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: '0755'
+
+    - name: Create K3s server config
+      copy:
+        dest: /etc/rancher/k3s/config.yaml
+        content: |
+          token: "{{ lookup('password', '/tmp/k3s-token.txt length=32') }}"
+          bind-address: 0.0.0.0
+          https-listen-port: 6443
+          advertise-address: {{ k3s_apiserver_advertise_address }}
+          write-kubeconfig-mode: 0644
+          write-kubeconfig: /etc/rancher/k3s/k3s.yaml
+          disable:
+            - traefik  # Will use either nginx or traefik via kustomize overlay
+        mode: '0600'
+
+    - name: Install K3s control-plane
+      shell: |
+        curl -sfL https://get.k3s.io | \
+        K3S_VERSION="{{ k3s_version }}" \
+        K3S_CONFIG_FILE=/etc/rancher/k3s/config.yaml \
+        INSTALL_K3S_EXEC="server --disable-cloud-controller --disable=servicelb" \
+        sh -
+      environment:
+        INSTALL_K3S_BIN_DIR: "/usr/local/bin"
+        INSTALL_K3S_SYMLINK: "skip"
+      register: k3s_install_result
+      retries: 3
+      delay: 10
+      until: k3s_install_result.rc == 0
+
+    - name: Wait for K3s to start
+      wait_for:
+        port: 6443
+        delay: 5
+        timeout: 300
+
+    - name: Extract K3s node-token
+      shell: cat {{ token_path }}
+      register: k3s_node_token
+
+    - name: Save node-token for agents
+      copy:
+        content: "{{ k3s_node_token.stdout }}"
+        dest: /tmp/k3s-node-token
+        mode: '0644'
+
+    - name: Fetch K3s kubeconfig
+      fetch:
+        src: "{{ kubeconfig_path }}"
+        dest: ./k3s-kubeconfig
+        flat: yes
+
+    - name: Display cluster access info
+      debug:
+        msg: |
+          K3s cluster initialized!
+          
+          Control-plane: {{ k3s_apiserver_advertise_address }}:{{ k3s_apiserver_bind_port }}
+          
+          Token for agents saved to: /tmp/k3s-node-token
+          
+          To access cluster locally:
+            export KUBECONFIG=./k3s-kubeconfig
+            sed -i "s/127.0.0.1/{{ k3s_apiserver_advertise_address }}/g" k3s-kubeconfig
+            kubectl get nodes
+
+- name: Join K3s Agents to Control-Plane
+  hosts: k3s_agents
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: Wait for cloud-init on agents
+      shell: |
+        if command -v cloud-init >/dev/null 2>&1; then
+          timeout 300 cloud-init status --wait || true
+          cloud-init status || true
+        else
+          echo "status: done (cloud-init not installed)"
+        fi
+      register: cloud_init_result
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for control-plane to be ready
+      wait_for:
+        host: "{{ k3s_apiserver_advertise_address }}"
+        port: 6443
+        timeout: 300
+
+    - name: Create k3s config directory
+      file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: '0755'
+
+    - name: Retrieve node-token from control-plane
+      slurp:
+        src: /tmp/k3s-node-token
+      register: node_token_b64
+      delegate_to: "k3s-control"
+
+    - name: Install K3s agent
+      shell: |
+        curl -sfL https://get.k3s.io | \
+        K3S_VERSION="{{ k3s_version }}" \
+        K3S_URL="https://{{ k3s_apiserver_advertise_address }}:{{ k3s_apiserver_bind_port }}" \
+        K3S_TOKEN="{{ node_token_b64.content | b64decode | trim }}" \
+        INSTALL_K3S_EXEC="agent" \
+        sh -
+      environment:
+        INSTALL_K3S_BIN_DIR: "/usr/local/bin"
+        INSTALL_K3S_SYMLINK: "skip"
+      register: k3s_agent_result
+      retries: 3
+      delay: 10
+      until: k3s_agent_result.rc == 0
+
+    - name: Wait for kubelet to start
+      wait_for:
+        port: 10250
+        delay: 5
+        timeout: 300
+
+- name: Verify K3s Cluster Health
+  hosts: k3s_control_plane
+  become: yes
+  gather_facts: no
+  tasks:
+    - name: Set expected cluster node count
+      set_fact:
+        expected_node_count: "{{ groups['k3s_cluster'] | default([]) | length }}"
+
+    - name: Wait for all nodes to be Ready
+      shell: |
+        /usr/local/bin/k3s kubectl get nodes --kubeconfig={{ kubeconfig_path }} -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}'
+      register: nodes_status
+      retries: 30
+      delay: 10
+      until: >
+        (nodes_status.stdout_lines | select('search', '=True') | list | length)
+        >= (expected_node_count | int)
+
+    - name: Display cluster status
+      shell: |
+        /usr/local/bin/k3s kubectl get nodes --kubeconfig={{ kubeconfig_path }}
+        echo "---"
+        /usr/local/bin/k3s kubectl get pods -A --kubeconfig={{ kubeconfig_path }}
+      register: cluster_status
+
+    - name: Cluster Status
+      debug:
+        msg: "{{ cluster_status.stdout }}"
+
+    - name: Cluster initialization complete!
+      debug:
+        msg: |
+          ✓ K3s cluster is ready
+          ✓ Control-plane: {{ k3s_apiserver_advertise_address }}
+          ✓ Nodes ready: {{ nodes_status.stdout_lines | select('search', '=True') | list | length }}/{{ expected_node_count }}
+          
+          Next: Run registry-vm.yml, then deploy-app.yml

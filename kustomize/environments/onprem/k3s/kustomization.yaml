@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../base
+
+patches:
+# Patch Ingress to match standard K3s Traefik or local Nginx Ingress class
+- patch: |-
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: frontend-ingress
+      namespace: default
+    spec:
+      ingressClassName: traefik

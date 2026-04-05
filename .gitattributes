@@ -2,3 +2,6 @@
 
 # Converts "CR + LF" to "LF", for all "text" files — for local files on all OSes and files pushed to the remote repo.
 * text=auto eol=lf
+
+# Shell scripts must stay LF (WSL/bash choke on CRLF).
+*.sh text eol=lf

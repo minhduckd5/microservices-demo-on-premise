@@ -1,0 +1,19 @@
+# In OpenShift, Route objects are usually preferred over Ingress for richer feature sets.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: frontend-route
+  namespace: default
+  labels:
+    app: frontend
+spec:
+  host: boutique.apps.internal
+  to:
+    kind: Service
+    name: frontend
+    weight: 100
+  port:
+    targetPort: 80
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

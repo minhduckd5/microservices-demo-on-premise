@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../../base
+- ingress.yaml
+
+components:
+# Phase 1: Remove public LoadBalancer (will be replaced by Ingress in Phase 2)
+- ../../../components/non-public-frontend
+
+# Phase 4: Baseline security hardening
+- ../../../components/network-policies
+
+# Phase 1: On-Premise Container Registry Mapping
+# NOTE: You must replace "CONTAINER_IMAGES_REGISTRY" in the component 
+# or via an environment variable substitution step before deploying.
+- ../../../components/container-images-registry
+
+# Phase 3: Observability 
+- ../../../components/observability-onprem
