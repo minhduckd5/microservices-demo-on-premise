@@ -3,10 +3,13 @@
 </p> -->
 ![Continuous Integration](https://github.com/GoogleCloudPlatform/microservices-demo/workflows/Continuous%20Integration%20-%20Main/Release/badge.svg)
 
-**Online Boutique** is a cloud-first microservices demo application.  The application is a
+> **About this fork (on-prem first)**  
+> This repository is a **fork** of [GoogleCloudPlatform/microservices-demo](https://github.com/GoogleCloudPlatform/microservices-demo) (Online Boutique). Upstream remains the reference implementation; **here, documentation and automation emphasize on-premises Kubernetes first**—Vagrant/VMware lab VMs, K3s, Ansible, private registry, and Kustomize overlays suitable for datacenter or air-gapped environments—**before** defaulting to cloud (GKE) quickstarts. Start with [docs/QUICKSTART-VAGRANT-ANSIBLE.md](/docs/QUICKSTART-VAGRANT-ANSIBLE.md), [docs/on-prem-deployment.md](/docs/on-prem-deployment.md), and [DEPLOYMENT_CHECKLIST.md](/DEPLOYMENT_CHECKLIST.md). The CI badge above refers to the **upstream** repository’s workflow.
+
+**Online Boutique** is a cloud-first microservices demo application. The application is a
 web-based e-commerce app where users can browse items, add them to the cart, and purchase them.
 
-Google uses this application to demonstrate how developers can modernize enterprise applications using Google Cloud products, including: [Google Kubernetes Engine (GKE)](https://cloud.google.com/kubernetes-engine), [Cloud Service Mesh (CSM)](https://cloud.google.com/service-mesh), [gRPC](https://grpc.io/), [Cloud Operations](https://cloud.google.com/products/operations), [Spanner](https://cloud.google.com/spanner), [Memorystore](https://cloud.google.com/memorystore), [AlloyDB](https://cloud.google.com/alloydb), and [Gemini](https://ai.google.dev/). This application works on any Kubernetes cluster.
+Google uses the upstream project to demonstrate how developers can modernize enterprise applications using Google Cloud products, including: [Google Kubernetes Engine (GKE)](https://cloud.google.com/kubernetes-engine), [Cloud Service Mesh (CSM)](https://cloud.google.com/service-mesh), [gRPC](https://grpc.io/), [Cloud Operations](https://cloud.google.com/products/operations), [Spanner](https://cloud.google.com/spanner), [Memorystore](https://cloud.google.com/memorystore), [AlloyDB](https://cloud.google.com/alloydb), and [Gemini](https://ai.google.dev/). This application works on any Kubernetes cluster.
 
 If you’re using this demo, please **★Star** this repository to show your interest!
 
