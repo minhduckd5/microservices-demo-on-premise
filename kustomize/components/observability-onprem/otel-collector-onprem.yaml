@@ -72,8 +72,8 @@ data:
       prometheus:
         endpoint: "0.0.0.0:8889"
         namespace: default
-      jaeger:
-        endpoint: "jaeger-all-in-one:14250"
+      otlp:
+        endpoint: "jaeger-all-in-one:4317"
         tls:
           insecure: true
     service:
@@ -81,7 +81,7 @@ data:
         traces:
           receivers: [otlp] 
           processors: [batch]
-          exporters: [jaeger] 
+          exporters: [otlp] 
         metrics:
           receivers: [otlp]
           processors: [batch]

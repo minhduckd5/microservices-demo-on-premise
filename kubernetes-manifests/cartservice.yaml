@@ -57,11 +57,13 @@ spec:
             cpu: 300m
             memory: 128Mi
         readinessProbe:
-          initialDelaySeconds: 15
+          initialDelaySeconds: 20
+          timeoutSeconds: 3
           grpc:
             port: 7070
         livenessProbe:
-          initialDelaySeconds: 15
+          initialDelaySeconds: 20
+          timeoutSeconds: 3
           periodSeconds: 10
           grpc:
             port: 7070
@@ -119,10 +121,14 @@ spec:
         ports:
         - containerPort: 6379
         readinessProbe:
+          initialDelaySeconds: 5
+          timeoutSeconds: 2
           periodSeconds: 5
           tcpSocket:
             port: 6379
         livenessProbe:
+          initialDelaySeconds: 5
+          timeoutSeconds: 2
           periodSeconds: 5
           tcpSocket:
             port: 6379

@@ -147,7 +147,10 @@ rm ~/.kube/config-onprem
 | Connection refused to K3s | Kubeconfig correct? | `export KUBECONFIG=./k3s-kubeconfig && kubectl get nodes` |
 | Kind cluster missing | Kind installed? | `kind get clusters` and reinstall if needed |
 | Port-forward fails | Service exists? | `kubectl get svc frontend` |
+| External port-forward refused | Connection refused from host PC? | Add `--address 0.0.0.0` to `kubectl port-forward` to bind to all interfaces instead of just `127.0.0.1` inside the VM. |
 | Ingress not accessible | /etc/hosts updated? | Add `192.168.1.210 boutique.internal` on the **browser PC** (control-plane IP; or `127.0.0.1` for Kind) |
+| Pods in CrashLoopBackOff | Liveness/Readiness probes timing out? | Ensure `initialDelaySeconds` (e.g., `20`) and `timeoutSeconds` (e.g., `3`) are configured in the `grpc` probe definitions to survive CPU spikes during cold starts. |
+| OpenTelemetry pod crashing | Error parsing `jaeger` exporter? | In newer collector versions (>v0.147.0), the native `jaeger` config is deprecated. Change exporter to `otlp` pointing to `jaeger-all-in-one:4317`. |
 
 ## Success Criteria
 
